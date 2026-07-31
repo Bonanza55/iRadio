@@ -34,7 +34,7 @@ def save_frequency(freq_hz):
 class SDRControllerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("RTL-SDR Controller")
+        self.root.title("iRadio")
         self.root.geometry("400x350")
         self.root.configure(bg="#1e1e1e")  # Apple macOS Dark Mode background
         self.root.resizable(True, True)
@@ -58,7 +58,7 @@ class SDRControllerApp:
         title_frame.pack(fill="x", padx=16, pady=(16, 6))
 
         brand_label = tk.Label(
-            title_frame, text="RTL-SDR FM TUNER", 
+            title_frame, text="SDR TUNER", 
             fg="#8e8e93", bg="#1e1e1e", font=("-size", 10, "-weight", "bold")
         )
         brand_label.pack(side="left")
@@ -147,12 +147,6 @@ class SDRControllerApp:
             btn.bind("<Button-1>", lambda e, h=handler: h())
             container.bind("<Button-1>", lambda e, h=handler: h())
 
-        # --- Bottom Label ---
-        bottom_label = tk.Label(
-            self.root, text="macOS Dark Appearance", 
-            fg="#636366", bg="#1e1e1e", font=("-size", 8)
-        )
-        bottom_label.pack(pady=(0, 4))
 
     def update_display_string(self):
         """Format frequency in Hz to clean MHz display string (e.g., 104.50)"""

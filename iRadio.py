@@ -8,6 +8,9 @@ from tkinter import messagebox
 # Configuration file matching your requested format
 CONFIG_FILE = "sdr_config.json"
 
+# Shown on the display while the receiver is suspended (same width as "104.500")
+BLANK_DISPLAY = "---.---"
+
 def load_last_frequency():
     """Load the last snapped frequency from disk or default to 104.5 MHz."""
     default_freq = 104500000.0
@@ -41,6 +44,7 @@ class SDRControllerApp:
         self.last_freq_hz = self.current_freq_hz
         self.input_buffer = ""
         self.current_bandwidth = "w"  # Default wide band for normal tuning
+        self.suspended = False        # True when CLEAR has stopped the receiver
 
         # SDR Process handler
         self.sdr_process = None
@@ -120,33 +124,28 @@ class SDRControllerApp:
             btn.bind("<Button-1>", lambda e, t=text: self.on_keypad_press(t))
             btn_frame.bind("<Button-1>", lambda e, t=text: self.on_keypad_press(t))
 
-        # --- Row 3: "Tune" and "Last" side-by-side ---
+        # --- Row 3: "TUNE", "LAST" and "CLEAR" side-by-side ---
         bottom_actions_frame = tk.Frame(self.root, bg="#1e1e1e")
         bottom_actions_frame.pack(fill="x", padx=16, pady=(4, 12))
 
-        # Tune Button container
-        tune_container = tk.Frame(bottom_actions_frame, bg="#00ffff", bd=1, relief="solid")
-        tune_container.pack(side="left", expand=True, fill="x", padx=(0, 4))
-
-        tune_btn = tk.Label(
-            tune_container, text="TUNE", bg="#000000", fg="#ffffff",
-            font=("-size", 10, "-weight", "bold"), cursor="hand2", pady=8
+        actions = (
+            ("TUNE",  self.apply_tuning,          (0, 3)),
+            ("LAST",  self.recall_last_frequency, (3, 3)),
+            ("CLEAR", self.clear_and_suspend,     (3, 0)),
         )
-        tune_btn.pack(fill="x", padx=1, pady=1)
-        tune_btn.bind("<Button-1>", lambda e: self.apply_tuning())
-        tune_container.bind("<Button-1>", lambda e: self.apply_tuning())
 
-        # Last Button container
-        last_container = tk.Frame(bottom_actions_frame, bg="#00ffff", bd=1, relief="solid")
-        last_container.pack(side="right", expand=True, fill="x", padx=(4, 0))
+        for (text, handler, pad) in actions:
+            container = tk.Frame(bottom_actions_frame, bg="#00ffff", bd=1, relief="solid")
+            container.pack(side="left", expand=True, fill="x", padx=pad)
 
-        last_btn = tk.Label(
-            last_container, text="LAST", bg="#000000", fg="#ffffff",
-            font=("-size", 10, "-weight", "bold"), cursor="hand2", pady=8
-        )
-        last_btn.pack(fill="x", padx=1, pady=1)
-        last_btn.bind("<Button-1>", lambda e: self.recall_last_frequency())
-        last_container.bind("<Button-1>", lambda e: self.recall_last_frequency())
+            btn = tk.Label(
+                container, text=text, bg="#000000", fg="#ffffff",
+                font=("-size", 10, "-weight", "bold"), cursor="hand2", pady=8
+            )
+            btn.pack(fill="x", padx=1, pady=1)
+
+            btn.bind("<Button-1>", lambda e, h=handler: h())
+            container.bind("<Button-1>", lambda e, h=handler: h())
 
         # --- Bottom Label ---
         bottom_label = tk.Label(
@@ -160,6 +159,18 @@ class SDRControllerApp:
         mhz = self.current_freq_hz / 1000000.0
         self.freq_display_var.set(f"{mhz:06.3f}")
 
+    def set_status(self, text, color):
+        """Update the small status indicator in the title bar."""
+        self.status_label.config(text=text, fg=color)
+
+    def clear_and_suspend(self):
+        """Blank the display and stop the receiver until a new frequency is tuned."""
+        self.input_buffer = ""
+        self.suspended = True
+        self.freq_display_var.set(BLANK_DISPLAY)
+        self.stop_sdr_backend()
+        self.set_status("● STANDBY", "#ff9f0a")
+
     def on_keypad_press(self, char):
         if char == 'WX':
             # Save current as last before jumping to WX
@@ -167,6 +178,7 @@ class SDRControllerApp:
             self.current_freq_hz = 162550000.0
             self.current_bandwidth = "n"
             self.input_buffer = ""
+            self.suspended = False
             self.update_display_string()
             save_frequency(self.current_freq_hz)
             self.restart_sdr_backend()
@@ -197,11 +209,15 @@ class SDRControllerApp:
                 self.current_bandwidth = "w"  # standard tuning uses wide band
                 
                 self.input_buffer = ""
+                self.suspended = False
                 self.update_display_string()
                 save_frequency(self.current_freq_hz)
                 self.restart_sdr_backend()
             except ValueError:
                 messagebox.showerror("Error", "Invalid frequency input.")
+        elif self.suspended:
+            # Nothing entered and the receiver is stopped: stay in standby.
+            return
         else:
             save_frequency(self.current_freq_hz)
             self.restart_sdr_backend()
@@ -214,30 +230,36 @@ class SDRControllerApp:
         self.current_bandwidth = "w"
         
         self.input_buffer = ""
+        self.suspended = False
         self.update_display_string()
         save_frequency(self.current_freq_hz)
         self.restart_sdr_backend()
 
     def start_sdr_backend(self):
         """Launch the C backend executable with stdout/stderr redirected to /dev/null."""
+        if self.suspended:
+            return
+
         freq_mhz_str = f"{self.current_freq_hz / 1e6:.4f}"
         binary_path = "./iRadio"
         
         if not os.path.exists(binary_path):
             print(f"Warning: {binary_path} not found locally. GUI running in mock mode.")
+            self.set_status("● MOCK", "#ff9f0a")
             return
 
         try:
-            devnull = open(os.devnull, 'w')
             cmd = [binary_path, "-f", freq_mhz_str, "-b", self.current_bandwidth, "-q", "-40"]
             self.sdr_process = subprocess.Popen(
-                cmd, stdout=devnull, stderr=devnull
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
+            self.set_status("● LIVE", "#30d158")
         except Exception as e:
             print(f"Failed to start SDR backend: {e}", file=sys.stderr)
+            self.set_status("● ERROR", "#ff453a")
 
-    def restart_sdr_backend(self):
-        """Safely terminate the current SDR process and spin up the new frequency."""
+    def stop_sdr_backend(self):
+        """Safely terminate the current SDR process, if any."""
         if self.sdr_process:
             try:
                 self.sdr_process.terminate()
@@ -248,7 +270,10 @@ class SDRControllerApp:
                 except Exception:
                     pass
             self.sdr_process = None
-        
+
+    def restart_sdr_backend(self):
+        """Safely terminate the current SDR process and spin up the new frequency."""
+        self.stop_sdr_backend()
         self.start_sdr_backend()
 
     def on_close(self):
